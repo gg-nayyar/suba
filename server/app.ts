@@ -1,75 +1,155 @@
 import cors from "cors";
+import api from "./api";
 import helmet from "helmet";
 import dot_env from "dotenv";
 import express from "express";
-import passport from "passport";
-import cookieSession from "cookie-session";
+import passport, { Profile } from "passport";
+import expressSession from "express-session";
 import { Strategy } from "passport-google-oauth20";
+import { Request, Response, NextFunction } from "express";
+import { default as UserMongo } from "./models/user.mongo";
 
 dot_env.config();
 
-const config ={
+const config = {
   CLIENT_ID: process.env.CLIENT_ID,
   CLIENT_SECRET: process.env.CLIENT_SECRET,
   COOKIE_KEY1: process.env.COOKIE_KEY1,
-  COOKIE_KEY2: process.env.COOKIE_KEY_2
+  COOKIE_KEY2: process.env.COOKIE_KEY_2,
+};
 
-}
 const app = express();
 
 app.use(helmet());
 
-app.use(cors({
-    origin:'http:/localhost:3000'
-}))
+app.use(
+  cors({
+    origin: "http:/localhost:3000",
+  })
+);
 
 app.use(express.json());
+app.use('/',api);
+
+async function verifyCallback(
+  accessToken: string,
+  refreshToken: string,
+  profile: Profile,
+  done: any
+) {
+  console.log(profile);
+  if(profile.emails){
+    /** FUTURE SCHEMA
+     * {
+     *    _id: string;
+     *    google_id: string;
+     *    username: string;
+     *    alias: string;
+     *    google_profile: Object (google profile) | null,
+     *    github_profile: Object (github profile) | null
+     * }
+     */
+    let foundUser = await UserMongo.find({ email: profile.emails[0].value })
+    console.log("FOUND USER: ", foundUser);
+    if(foundUser.length > 0) {
+      foundUser[0].accessToken = accessToken;
+      await foundUser[0].save();
+      done(null, {
+        profile,
+        accessToken,
+        refreshToken
+      })
+    } else {
+      if(profile.name) {
+        console.log("HAS NAME")
+        const firstName = profile.name.givenName;
+        const lastName = profile.name.familyName;
+        const user = new UserMongo({
+          accessToken,
+          email: profile.emails[0].value,
+          firstName,
+          lastName,
+          id: profile.id,
+          username: profile.username,
+        });
+        await user.save();
+      }
+    }
+  };
+  done(null, {
+    profile,
+    accessToken,
+    refreshToken
+  });
+}
+
+app.use(
+  expressSession({
+    secret: [config.COOKIE_KEY1 || "error", config.COOKIE_KEY2 || "error"],
+    resave: false,
+    saveUninitialized: true,
+    cookie: { secure: true },
+  })
+);
 
 app.use(passport.initialize());
 app.use(passport.session());
 
-function verifyCallback(accessToken:string,refreshToken:string,profile:any,done:any ){
-  console.log(profile);
-  done(null,profile)
+function checkedLoggedIn(req: Request, res: Response, next: NextFunction) {
+  const isLoggedIn = false;
+  if (!isLoggedIn) {
+    return res.status(401).json({
+      error: "You must log In!",
+    });
+  }
+  return isLoggedIn;
 }
 
-app.use(cookieSession({
-  name: 'session',
-  maxAge: 1000 * 60 * 60 * 24 * 31,
-  keys: [config.COOKIE_KEY1|| "error",config.COOKIE_KEY2|| "error"],
-}))
-
-passport.serializeUser((user,done)=>{
+passport.serializeUser((user, done) => {
   done(null, user);
-})
+});
 
-passport.deserializeUser((obj,done)=>{
-  done(null, obj||{error: "error"});
-})
+passport.deserializeUser((obj, done) => {
+  done(null, obj || { error: "error" });
+});
 
-passport.use(new Strategy({
-  clientID: config.CLIENT_ID || "Client Id not found",
-  clientSecret:config.CLIENT_SECRET || "Secret not found",
-  callbackURL: "/auth/google/callback"
-},verifyCallback))
+passport.use(
+  new Strategy(
+    {
+      clientID: config.CLIENT_ID || "Client Id not found",
+      clientSecret: config.CLIENT_SECRET || "Secret not found",
+      callbackURL: "/auth/google/callback",
+    },
+    verifyCallback
+  )
+);
 
-app.get("/auth/google",
-    passport.authenticate('google',{
-        scope:['email']
-    })
-)
 app.get(
-    "/auth/google/callback",
-    passport.authenticate("google", {
-      failureRedirect: "/failure",
-      successRedirect: "http://localhost:3000/home",
-      session: true,
-    }),
-    (req, res) => {
-      console.log("Google Called us Back");
+  "/auth/google",
+  passport.authenticate("google", {
+    scope: ["email", "https://www.googleapis.com/auth/admin.directory.user.readonly", "https://www.googleapis.com/auth/userinfo.profile"],
+  })
+);
+app.get(
+  "/auth/google/callback",
+  passport.authenticate("google", {
+    failureRedirect: "/failure",
+    // successRedirect: "http://localhost:8000/something-test",
+    session: true,
+  }),
+  (req, res) => {
+    const session = (req.session as expressSession.Session & Partial<expressSession.SessionData> & { passport: { user: { accessToken: string } } }    )
+    if(session.passport) {
+      res.cookie('accessToken', session.passport.user.accessToken);
+      return res.redirect("http://localhost:3000/home")
     }
-  );
-  
-  app.get("/auth/logout", (req, res) => {});
-  
+    return res.json(req.session)
+  }
+);
+
+app.get("/auth/logout", (req, res) => {});
+app.get("/is-signed-in", (req: Request<{}, {}, { accessToken: string }>, res) => {
+    
+})
+
 export default app;
