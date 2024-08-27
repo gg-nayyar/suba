@@ -1,10 +1,11 @@
 import cors from "cors";
 import api from "./api";
+import axios from "axios";
 import helmet from "helmet";
 import dot_env from "dotenv";
 import express from "express";
-import passport, { Profile } from "passport";
 import expressSession from "express-session";
+import passport, { Profile } from "passport";
 import { Strategy } from "passport-google-oauth20";
 import { Request, Response, NextFunction } from "express";
 import { default as UserMongo } from "./models/user.mongo";
@@ -24,7 +25,7 @@ app.use(helmet());
 
 app.use(
   cors({
-    origin: "http:/localhost:3000",
+    origin: "http://localhost:3000",
   })
 );
 
@@ -148,8 +149,36 @@ app.get(
 );
 
 app.get("/auth/logout", (req, res) => {});
-app.get("/is-signed-in", (req: Request<{}, {}, { accessToken: string }>, res) => {
-    
-})
+
+// GET: QUERY, PARAMETERS > for normal cases like id, tag, slug
+//                          Authentication: headers (Authorization: `Bearer TOKEN`)
+// POST, PUT, DELETE > BODY
+//
+interface TokenInfoResponse {
+  error_description?: string;
+  [key: string]: any;
+}                          
+app.post("/is-signed-in", async (req: Request, res: Response) => {
+  const { accessToken } = req.body;
+
+  async function verifyAccessToken(accessToken: string): Promise<TokenInfoResponse | null> {
+    try {
+      const { data } = await axios.get<TokenInfoResponse>(`https://www.googleapis.com/oauth2/v3/tokeninfo?access_token=${accessToken}`);
+  
+      if (data.error_description) {
+        throw new Error(`Error verifying access token: ${data.error_description}`);
+      }
+  
+      return data;
+    } catch (error) {
+      console.error('Error verifying access token:', error);
+      return null;
+    }
+  }
+
+  const isValid = !!(await verifyAccessToken(accessToken));
+  return res.json({ validity: isValid });
+});
+
 
 export default app;

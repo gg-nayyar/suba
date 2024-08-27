@@ -12,31 +12,22 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-const app_1 = __importDefault(require("./app"));
-const http_1 = __importDefault(require("http"));
-const dotenv_1 = __importDefault(require("dotenv"));
-const mongoose_1 = __importDefault(require("mongoose"));
-dotenv_1.default.config();
-const MONGO_URI = process.env.MONGO_URI;
-const PORT = 8000;
-const server = http_1.default.createServer(app_1.default);
-function startServer() {
+const node_fetch_1 = __importDefault(require("node-fetch"));
+function verifyAccessToken(accessToken) {
     return __awaiter(this, void 0, void 0, function* () {
-        mongoose_1.default.connection.once('open', () => {
-            console.log("MongoDB is connected");
-        });
-        mongoose_1.default.connection.on('error', (err) => {
-            console.log(err);
-        });
         try {
-            yield mongoose_1.default.connect(MONGO_URI);
-            server.listen(PORT, () => {
-                console.log(`Server is running on port:${PORT}`);
-            });
+            const response = yield (0, node_fetch_1.default)(`https://www.googleapis.com/oauth2/v3/tokeninfo?access_token=${accessToken}`);
+            const data = yield response.json();
+            if (data.error_description) {
+                throw new Error(`Error verifying access token: ${data.error_description}`);
+            }
+            // Token is valid, data will include information about the token
+            return data;
         }
-        catch (err) {
-            console.error(err);
+        catch (error) {
+            console.error('Error verifying access token:', error);
+            return null;
         }
     });
 }
-startServer();
+console.log(verifyAccessToken("ya29.a0AcM612z1BtA2Vb9HILd9jvoIQHpBX-2n75xqrg_-2AFvxE9xXV1fK4M0lVyXSH3YwES80UnU3e9b2n1iBp5zvvqiyJCz1c8JmOM8iX3KrHhhfuRm-JaRsD4_rI_ySzsMmoFOpk-XF1zlfvmLzCDrL8aThH4DvIhuuycaCgYKAZwSARMSFQHGX2Mi7tMTBa5JGzfD6bhStNS8Tg0170"));
