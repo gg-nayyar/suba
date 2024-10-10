@@ -12,13 +12,21 @@ const Page = () => {
   const accessToken = Cookie.get("accessToken");
 
   const [isValid, setIsValid] = useState("loading");
+  const [userExist, setUserExitst] = useState("loading");
   async function checkSignedIn(accessToken: string | undefined) {
     const response = await axios.post("http://localhost:8000/is-signed-in", {
       accessToken: accessToken,
     });
-    if (response.data.validity) {
+    if (response.data.validity && !response.data.userExist) {
       router.push("/home");
     }
+    else if(response.data.userExist){
+      router.push("/username");
+    }
+    /**
+     * if(response.data.validity == "no username") redirect('/username')
+     */
+    setUserExitst(response.data.userExist ? "user doesn't exist" : "user exists");
     setIsValid(response.data.validity ? "valid" : "not-valid");
   }
   useEffect(() => {
@@ -28,7 +36,7 @@ const Page = () => {
   }, []);
   return (
     <>
-      {isValid == "loading" ? (
+      {isValid == "loading" && userExist == "loading" ? (
         <div className="h-screen w-screen self-center justify-center ">
           <Image
             src="/nyan.gif"

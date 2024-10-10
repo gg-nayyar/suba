@@ -1,5 +1,6 @@
 import cors from "cors";
 import api from "./api";
+import path from "path"
 import axios from "axios";
 import helmet from "helmet";
 import dot_env from "dotenv";
@@ -8,7 +9,7 @@ import expressSession from "express-session";
 import passport, { Profile } from "passport";
 import { Strategy } from "passport-google-oauth20";
 import { Request, Response, NextFunction } from "express";
-import { default as UserMongo } from "./models/user.mongo";
+import userMongo, { default as UserMongo } from "./models/user.mongo";
 
 dot_env.config();
 
@@ -26,20 +27,23 @@ app.use(helmet());
 app.use(
   cors({
     origin: "http://localhost:3000",
+    credentials: true,
+    methods: "GET,HEAD,PUT,PATCH,POST,DELETE",
+    allowedHeaders: "Content-Type, Authorization, accessToken",
   })
 );
+app.use("/media", express.static(path.join(__dirname, 'media')));
 
 app.use(express.json());
-app.use('/',api);
+app.use("/", api);
 
 async function verifyCallback(
   accessToken: string,
   refreshToken: string,
   profile: Profile,
-  done: any
+  done: Function
 ) {
-  console.log(profile);
-  if(profile.emails){
+  if (profile.emails) {
     /** FUTURE SCHEMA
      * {
      *    _id: string;
@@ -50,19 +54,21 @@ async function verifyCallback(
      *    github_profile: Object (github profile) | null
      * }
      */
-    let foundUser = await UserMongo.find({ email: profile.emails[0].value })
+    // user.username => /home -> no username
+    // user.username == null => only /username
+    // /username
+    let foundUser = await UserMongo.find({ email: profile.emails[0].value });
     console.log("FOUND USER: ", foundUser);
-    if(foundUser.length > 0) {
+    if (foundUser.length > 0) {
       foundUser[0].accessToken = accessToken;
       await foundUser[0].save();
       done(null, {
         profile,
         accessToken,
-        refreshToken
-      })
+        refreshToken,
+      });
     } else {
-      if(profile.name) {
-        console.log("HAS NAME")
+      if (profile.name) {
         const firstName = profile.name.givenName;
         const lastName = profile.name.familyName;
         const user = new UserMongo({
@@ -71,17 +77,18 @@ async function verifyCallback(
           firstName,
           lastName,
           id: profile.id,
-          username: profile.username,
+          username: null,
         });
         await user.save();
       }
     }
-  };
+  }
   done(null, {
     profile,
     accessToken,
-    refreshToken
+    refreshToken,
   });
+  3;
 }
 
 app.use(
@@ -95,16 +102,6 @@ app.use(
 
 app.use(passport.initialize());
 app.use(passport.session());
-
-function checkedLoggedIn(req: Request, res: Response, next: NextFunction) {
-  const isLoggedIn = false;
-  if (!isLoggedIn) {
-    return res.status(401).json({
-      error: "You must log In!",
-    });
-  }
-  return isLoggedIn;
-}
 
 passport.serializeUser((user, done) => {
   done(null, user);
@@ -128,7 +125,11 @@ passport.use(
 app.get(
   "/auth/google",
   passport.authenticate("google", {
-    scope: ["email", "https://www.googleapis.com/auth/admin.directory.user.readonly", "https://www.googleapis.com/auth/userinfo.profile"],
+    scope: [
+      "email",
+      "https://www.googleapis.com/auth/admin.directory.user.readonly",
+      "https://www.googleapis.com/auth/userinfo.profile",
+    ],
   })
 );
 app.get(
@@ -138,17 +139,34 @@ app.get(
     // successRedirect: "http://localhost:8000/something-test",
     session: true,
   }),
-  (req, res) => {
-    const session = (req.session as expressSession.Session & Partial<expressSession.SessionData> & { passport: { user: { accessToken: string } } }    )
-    if(session.passport) {
-      res.cookie('accessToken', session.passport.user.accessToken);
-      return res.redirect("http://localhost:3000/home")
+  async (req, res) => {
+    try {
+      const session = req.session as expressSession.Session &
+        Partial<expressSession.SessionData> & {
+          passport: { user: { accessToken: string } };
+        };
+      if (session.passport) {
+        const accessToken = session.passport.user.accessToken;
+
+        res.cookie("accessToken", accessToken);
+
+        return res.redirect("http://localhost:3000");
+      } else {
+        return res.json(req.session);
+      }
+    } catch (error) {
+      console.error(error);
+      if (!res.headersSent) {
+        return res.status(500).send("Internal Server Error");
+      }
     }
-    return res.json(req.session)
   }
 );
 
-app.get("/auth/logout", (req, res) => {});
+app.get("/auth/logout", (req, res, next) => {
+  res.clearCookie("accessToken", { path: "/" });
+  return res.redirect("http://localhost:3000");
+});
 
 // GET: QUERY, PARAMETERS > for normal cases like id, tag, slug
 //                          Authentication: headers (Authorization: `Bearer TOKEN`)
@@ -157,28 +175,37 @@ app.get("/auth/logout", (req, res) => {});
 interface TokenInfoResponse {
   error_description?: string;
   [key: string]: any;
-}                          
+}
 app.post("/is-signed-in", async (req: Request, res: Response) => {
   const { accessToken } = req.body;
 
-  async function verifyAccessToken(accessToken: string): Promise<TokenInfoResponse | null> {
+  async function verifyAccessToken(
+    accessToken: string
+  ): Promise<TokenInfoResponse | null> {
     try {
-      const { data } = await axios.get<TokenInfoResponse>(`https://www.googleapis.com/oauth2/v3/tokeninfo?access_token=${accessToken}`);
-  
+      const { data } = await axios.get<TokenInfoResponse>(
+        `https://www.googleapis.com/oauth2/v3/tokeninfo?access_token=${accessToken}`
+      );
+
       if (data.error_description) {
-        throw new Error(`Error verifying access token: ${data.error_description}`);
+        throw new Error(
+          `Error verifying access token: ${data.error_description}`
+        );
       }
-  
+
       return data;
     } catch (error) {
-      console.error('Error verifying access token:', error);
+      console.error("Error verifying access token:", error);
       return null;
     }
   }
-
+  async function usernameExists(): Promise<Boolean> {
+    const user = await userMongo.findOne({ username: null });
+    return !!user;
+  }
+  const userExist = await usernameExists();
   const isValid = !!(await verifyAccessToken(accessToken));
-  return res.json({ validity: isValid });
+  return res.json({ validity: isValid, userExist });
 });
-
 
 export default app;
